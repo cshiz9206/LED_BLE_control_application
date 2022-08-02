@@ -1,0 +1,290 @@
+package com.example.kketblecontrol;
+
+import android.Manifest;
+import android.annotation.SuppressLint;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.le.BluetoothLeScanner;
+import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanResult;
+import android.content.Context;
+import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Bundle;
+import android.os.Handler;
+import android.util.Log;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.AdapterView;
+import android.widget.BaseAdapter;
+import android.widget.Button;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+
+import java.util.ArrayList;
+
+public class MainActivity extends AppCompatActivity {
+
+    ArrayList<DeviceData> searchedDeviceList = new ArrayList<DeviceData>();
+    Button btnOpenCtrlAct;
+    private Handler mHandler;
+    ListView searchedDeviceView;
+
+    static Context mainContext;
+
+    //BLE
+    //public static final int PERMISSION_REQUEST_COARSE_LOCATION = 7;
+    public static final int PERMISSION_REQUEST_FINE_LOCATION = 7;
+    private static final int REQUEST_ENABLE_BT = 1;
+    private static final long SCAN_PERIOD = 10000;
+    private BluetoothAdapter mBluetoothAdapter;
+    private BluetoothLeScanner mBluetoothLeScanner;
+    private LeDeviceListAdapter mLeDeviceListAdapter;
+    private boolean mScanning;
+
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        setContentView(R.layout.activity_scan);
+        setTitle(R.string.title_devices);
+        mHandler = new Handler();
+
+
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.BLUETOOTH}, PERMISSION_REQUEST_FINE_LOCATION);
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.BLUETOOTH_ADMIN}, PERMISSION_REQUEST_FINE_LOCATION);
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_COARSE_LOCATION}, PERMISSION_REQUEST_FINE_LOCATION);
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, PERMISSION_REQUEST_FINE_LOCATION);
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.BLUETOOTH_CONNECT}, PERMISSION_REQUEST_FINE_LOCATION);
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.BLUETOOTH_SCAN}, PERMISSION_REQUEST_FINE_LOCATION);
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, PERMISSION_REQUEST_FINE_LOCATION);
+
+
+        mainContext = this;
+
+//        DeviceControlActivity controlActivity = new DeviceControlActivity();
+//        DeviceScanActivity scanActivity = new DeviceScanActivity();
+
+        // list view
+        searchedDeviceView = (ListView) findViewById(R.id.device_list);
+//        final ListAdapter listAdapter = new ListAdapter(this, searchedDeviceList);
+        searchedDeviceView.setAdapter(mLeDeviceListAdapter);
+        searchedDeviceView.setOnItemClickListener(new AdapterView.OnItemClickListener() {
+            @SuppressLint("MissingPermission")
+            @Override
+            public void onItemClick(AdapterView<?> adapterView, View view, int position, long l) {
+                //Toast.makeText(getApplicationContext(), listAdapter.getItem(position).getAddr(), Toast.LENGTH_LONG).show();
+
+                final BluetoothDevice device = mLeDeviceListAdapter.getDevice(position);
+                if (device == null) return;
+                final Intent intent = new Intent(MainActivity.this, ControlActivity.class);
+                //final Intent intent = new Intent();
+                intent.putExtra(ControlActivity.EXTRAS_DEVICE_NAME, device.getName());
+                intent.putExtra(ControlActivity.EXTRAS_DEVICE_ADDRESS, device.getAddress());
+                if (mScanning) {
+                    mBluetoothLeScanner.stopScan(mLeScanCallback);
+                    mScanning = false;
+                }
+                startActivity(intent);
+            }
+        });
+
+        //getSupportActionBar().setDisplayHomeAsUpEnabled(true);
+
+
+        // change Activity
+//        btnOpenCtrlAct = (Button) findViewById(R.id.btnOpenCtrlAct);
+//
+//        btnOpenCtrlAct.setOnClickListener((v) -> {
+//                Intent intent = new Intent(getApplicationContext(), ControlActivity.class);
+//                startActivity(intent);
+//        });
+
+        bleScanStart();
+    }
+
+    public void bleScanStart() {
+//        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_COARSE_LOCATION}, PERMISSION_REQUEST_COARSE_LOCATION);
+//        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, PERMISSION_REQUEST_FINE_LOCATION);
+
+        // 이 검사를 사용하여 장치에서 BLE이 지원되는지 여부를 확인할 수 있습니다. 그러면 할 수 있다
+        // BLE 관련 기능을 선택적으로 비활성화합니다.
+        if (!getPackageManager().hasSystemFeature(PackageManager.FEATURE_BLUETOOTH_LE)) {//블루투스 없으면
+            Toast.makeText(this, R.string.ble_not_supported, Toast.LENGTH_SHORT).show();
+            finish();
+        }
+
+        // Bluetooth 어댑터를 초기화합니다. API 레벨 18 이상의 경우 다음을 참조하십시오.
+        // Bluetooth Manager를 통한 Bluetooth 어댑터.
+        final BluetoothManager bluetoothManager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+        mBluetoothAdapter = bluetoothManager.getAdapter();
+        mBluetoothLeScanner = mBluetoothAdapter.getBluetoothLeScanner();
+
+        // 장치에서 블루투스가 지원되는지 확인합니다.
+        if (mBluetoothAdapter == null) {//블루투스 없으면
+            Toast.makeText(this, R.string.error_bluetooth_not_supported, Toast.LENGTH_SHORT).show();
+            finish();
+            return;
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    @Override
+    protected void onResume() {//블루투스 꺼져있을때 권한요청하는거
+        super.onResume();
+
+        // 장치에서 블루투스가 활성화되어 있는지 확인합니다. 현재 블루투스가 활성화되지 않은 경우
+        // 사용자에게 사용 권한을 부여하여 대화 상자를 표시하려는 의도를 표시합니다.
+        if (!mBluetoothAdapter.isEnabled()) {
+            if (!mBluetoothAdapter.isEnabled()) {
+                Intent enableBtIntent = new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE);
+                startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT);
+            }
+        }
+
+        // 목록 보기 어댑터를 초기화합니다.
+        mLeDeviceListAdapter = new LeDeviceListAdapter();
+        searchedDeviceView.setAdapter(mLeDeviceListAdapter);
+        scanLeDevice(true);
+    }
+
+    //    @SuppressLint("MissingPermission")
+    private void scanLeDevice(final boolean enable) {
+        if (enable) {
+            //설정해놓은 블루투스 장치 검색시간이 지나면 검색 중지
+            mHandler.postDelayed(new Runnable() {
+                @Override
+                public void run() {
+                    mScanning = false;
+                    mBluetoothLeScanner.stopScan(mLeScanCallback);
+                    invalidateOptionsMenu();
+                }
+            }, SCAN_PERIOD);
+
+            mScanning = true;
+            mBluetoothLeScanner.startScan(mLeScanCallback);
+        } else {
+            mScanning = false;
+            mBluetoothLeScanner.stopScan(mLeScanCallback);
+        }
+        invalidateOptionsMenu();
+    }
+
+    protected void onListItemClick(ListView l, View v, int position, long id) {
+        final BluetoothDevice device = mLeDeviceListAdapter.getDevice(position);
+        if (device == null) return;
+        final Intent intent = new Intent(this, ControlActivity.class);
+        intent.putExtra(ControlActivity.EXTRAS_DEVICE_NAME, device.getName());
+        intent.putExtra(ControlActivity.EXTRAS_DEVICE_ADDRESS, device.getAddress());
+        if (mScanning) {
+            mBluetoothLeScanner.stopScan(mLeScanCallback);
+            mScanning = false;
+        }
+        startActivity(intent);
+    }
+
+    private class LeDeviceListAdapter extends BaseAdapter {
+        private ArrayList<BluetoothDevice> mLeDevices;
+        private LayoutInflater mInflator;
+
+        public LeDeviceListAdapter() {
+            super();
+            mLeDevices = new ArrayList<BluetoothDevice>();
+            mInflator = MainActivity.this.getLayoutInflater();
+        }
+
+        public void addDevice(BluetoothDevice device) {
+            if (!mLeDevices.contains(device)) {
+                mLeDevices.add(device);
+            }
+        }
+
+        public BluetoothDevice getDevice(int position) {
+            return mLeDevices.get(position);
+        }
+
+        public void clear() {
+            mLeDevices.clear();
+        }
+
+        @Override
+        public int getCount() {
+            return mLeDevices.size();
+        }
+
+        @Override
+        public Object getItem(int i) {
+            return mLeDevices.get(i);
+        }
+
+        @Override
+        public long getItemId(int i) {
+            return i;
+        }
+
+        @Override
+        public View getView(int i, View view, ViewGroup viewGroup) {
+            ViewHolder viewHolder;
+            // 일반적인 리스트뷰 최소화 코드
+            if (view == null) {
+                view = mInflator.inflate(R.layout.listitem_device, null);
+                viewHolder = new ViewHolder();
+                viewHolder.deviceAddress = (TextView) view.findViewById(R.id.device_address);
+                viewHolder.deviceName = (TextView) view.findViewById(R.id.device_name);
+                view.setTag(viewHolder);
+            } else {
+                viewHolder = (ViewHolder) view.getTag();
+            }
+
+            BluetoothDevice device = mLeDevices.get(i);
+            final String deviceName = device.getName();
+            if (deviceName != null && deviceName.length() > 0)
+                viewHolder.deviceName.setText(deviceName);
+            else
+                viewHolder.deviceName.setText(R.string.unknown_device);
+            viewHolder.deviceAddress.setText(device.getAddress());
+
+            return view;
+        }
+    }
+
+    static class ViewHolder {
+        TextView deviceName;
+        TextView deviceAddress;
+    }
+
+    private ScanCallback mLeScanCallback = new ScanCallback() {
+        @Override
+        public void onScanResult(int callbackType, ScanResult result) {
+            super.onScanResult(callbackType, result);
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    mLeDeviceListAdapter.addDevice(result.getDevice());
+                    mLeDeviceListAdapter.notifyDataSetChanged();
+                }
+            });
+        }
+    };
+
+//    private BluetoothAdapter.LeScanCallback mLeScanCallback =
+//            new BluetoothAdapter.LeScanCallback() {
+//
+//                @Override
+//                public void onLeScan(final BluetoothDevice device, int rssi, byte[] scanRecord) {
+//                    runOnUiThread(new Runnable() {
+//                        @Override
+//                        public void run() {
+//                            mLeDeviceListAdapter.addDevice(device);
+//                            mLeDeviceListAdapter.notifyDataSetChanged();
+//                        }
+//                    });
+//                }
+//            };
+}
